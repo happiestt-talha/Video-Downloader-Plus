@@ -222,10 +222,19 @@
 }
 
 #video-downloader-sidebar .vd-progress-status-text {
+    font-size: 11px;
+    color: #ffffff;
+    margin-top: 4px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+#video-downloader-sidebar .vd-progress-sub-text {
     font-size: 10px;
     color: #60a5fa;
-    margin-top: 4px;
-    font-weight: 500;
+    margin-top: 2px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;

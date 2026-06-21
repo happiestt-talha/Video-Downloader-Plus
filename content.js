@@ -444,15 +444,18 @@ async function startJobWithProgress(containerEl, startAction, payload, filename)
                 <div class="vd-progress-bar-fill" style="width: 0%"></div>
             </div>
             <div class="vd-progress-status-text">Starting download...</div>
+            <div class="vd-progress-sub-text">0.0%</div>
         </div>
     `;
 
     const fillEl = containerEl.querySelector('.vd-progress-bar-fill');
     const textEl = containerEl.querySelector('.vd-progress-status-text');
+    const subTextEl = containerEl.querySelector('.vd-progress-sub-text');
 
     const startResp = await chrome.runtime.sendMessage({ action: startAction, ...payload, filename });
     if (!startResp || !startResp.success || !startResp.jobId) {
         textEl.textContent = '❌ Failed to start download';
+        subTextEl.textContent = '';
         return;
     }
 
@@ -464,19 +467,34 @@ async function startJobWithProgress(containerEl, startAction, payload, filename)
 
             const job = statusResp.job;
             fillEl.style.width = `${job.percent}%`;
-            textEl.textContent = job.statusText || `${job.percent.toFixed(1)}%`;
+
+            let mainText = `${job.percent.toFixed(1)}%`;
+            if (job.downloadedSize && job.totalSize) {
+                mainText += ` • ${job.downloadedSize} / ${job.totalSize}`;
+            } else if (job.fragment) {
+                mainText += ` • ${job.fragment}`;
+            }
+            textEl.textContent = mainText;
+
+            let subText = '';
+            if (job.speed) subText += `${job.speed}`;
+            if (job.eta) subText += (subText ? ' • ' : '') + `ETA ${job.eta}`;
+            subTextEl.textContent = subText || job.statusText;
 
             if (job.status === 'completed') {
                 clearInterval(interval);
                 fillEl.style.width = '100%';
                 textEl.textContent = '✅ Complete! Saving file...';
+                subTextEl.textContent = 'Transferring file to browser downloads';
                 await chrome.runtime.sendMessage({ action: 'triggerJobDownload', jobId, filename });
                 setTimeout(() => {
                     textEl.textContent = '✅ Saved to downloads!';
+                    subTextEl.textContent = '';
                 }, 1500);
             } else if (job.status === 'error') {
                 clearInterval(interval);
-                textEl.textContent = `❌ ${job.statusText || 'Download failed'}`;
+                textEl.textContent = '❌ Download failed';
+                subTextEl.textContent = job.error ? job.error.substring(0, 70) : 'Process error';
             }
         } catch (e) {
             console.error('Job status check failed:', e);
