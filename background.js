@@ -175,6 +175,40 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             .catch(error => sendResponse({ success: false, error: error.message }));
         return true;
     }
+
+    if (request.action === 'startDownloadUrl') {
+        const url = `${API_URL}/start-download-url?mediaUrl=${encodeURIComponent(request.mediaUrl)}&pageUrl=${encodeURIComponent(request.pageUrl || '')}&filename=${encodeURIComponent(request.filename)}`;
+        fetch(url)
+            .then(res => res.json())
+            .then(data => sendResponse(data))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
+
+    if (request.action === 'startDownloadVideo') {
+        const url = `${API_URL}/start-download-video?videoId=${encodeURIComponent(request.videoId)}&quality=${encodeURIComponent(request.quality)}&filename=${encodeURIComponent(request.filename)}`;
+        fetch(url)
+            .then(res => res.json())
+            .then(data => sendResponse(data))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
+
+    if (request.action === 'getJobStatus') {
+        fetch(`${API_URL}/job-status?id=${request.jobId}`)
+            .then(res => res.json())
+            .then(data => sendResponse({ success: true, job: data }))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
+
+    if (request.action === 'triggerJobDownload') {
+        const downloadUrl = `${API_URL}/get-job-file?id=${request.jobId}`;
+        chrome.downloads.download({ url: downloadUrl, filename: request.filename, saveAs: false })
+            .then(downloadId => sendResponse({ success: true, downloadId }))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
 });
 
 chrome.action.onClicked.addListener(async (tab) => {

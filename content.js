@@ -436,23 +436,66 @@ function renderVideos(videos, searchTerm = '', filter = 'all') {
         }
     }).join('');
 
+async function startJobWithProgress(containerEl, startAction, payload, filename) {
+    if (!containerEl) return;
+    containerEl.innerHTML = `
+        <div class="vd-progress-container">
+            <div class="vd-progress-bar-bg">
+                <div class="vd-progress-bar-fill" style="width: 0%"></div>
+            </div>
+            <div class="vd-progress-status-text">Starting download...</div>
+        </div>
+    `;
+
+    const fillEl = containerEl.querySelector('.vd-progress-bar-fill');
+    const textEl = containerEl.querySelector('.vd-progress-status-text');
+
+    const startResp = await chrome.runtime.sendMessage({ action: startAction, ...payload, filename });
+    if (!startResp || !startResp.success || !startResp.jobId) {
+        textEl.textContent = '❌ Failed to start download';
+        return;
+    }
+
+    const jobId = startResp.jobId;
+    const interval = setInterval(async () => {
+        try {
+            const statusResp = await chrome.runtime.sendMessage({ action: 'getJobStatus', jobId });
+            if (!statusResp || !statusResp.success || !statusResp.job) return;
+
+            const job = statusResp.job;
+            fillEl.style.width = `${job.percent}%`;
+            textEl.textContent = job.statusText || `${job.percent.toFixed(1)}%`;
+
+            if (job.status === 'completed') {
+                clearInterval(interval);
+                fillEl.style.width = '100%';
+                textEl.textContent = '✅ Complete! Saving file...';
+                await chrome.runtime.sendMessage({ action: 'triggerJobDownload', jobId, filename });
+                setTimeout(() => {
+                    textEl.textContent = '✅ Saved to downloads!';
+                }, 1500);
+            } else if (job.status === 'error') {
+                clearInterval(interval);
+                textEl.textContent = `❌ ${job.statusText || 'Download failed'}`;
+            }
+        } catch (e) {
+            console.error('Job status check failed:', e);
+        }
+    }, 800);
+}
+
     // Attach event handlers
     filtered.forEach(video => {
         if (video.isGeneric) {
             const btn = document.querySelector(`.generic-download-btn[data-media-url="${CSS.escape(video.mediaUrl)}"]`);
             if (btn) {
                 btn.onclick = async () => {
-                    btn.textContent = 'Downloading...';
-                    btn.disabled = true;
                     const filename = sanitizeFilename(document.title) + '.mp4';
-                    const resp = await chrome.runtime.sendMessage({
-                        action: 'downloadMediaUrl',
+                    const actionsDiv = btn.parentElement;
+                    startJobWithProgress(actionsDiv, 'startDownloadUrl', {
                         mediaUrl: video.mediaUrl,
-                        pageUrl: window.location.href,
-                        filename
-                    });
-                    btn.textContent = resp.success ? 'Downloaded!' : 'Failed';
-                    setTimeout(() => { btn.textContent = 'Download'; btn.disabled = false; }, 2000);
+                        pageUrl: window.location.href
+                    }, filename);
                 };
             }
             return;
@@ -524,53 +567,34 @@ function attachDownloadHandler(videoId, formats, videoTitle) {
         const format = formats[parseInt(selectedIdx)];
         if (!format) return;
 
-        downloadBtn.textContent = 'Downloading...';
-        downloadBtn.disabled = true;
-
         const safeTitle = sanitizeFilename(videoTitle);
         const ext = format.extension || (format.type === 'audio' ? 'mp3' : 'mp4');
         const filename = `${safeTitle}.${ext}`;
 
-        let downloadResponse;
         const cached = window.formatCache[videoId];
         const isGenericOrExtractor = videoId.startsWith('page-extractor') || videoId.startsWith('iframe-embed') || videoId.startsWith('dom-video') || videoId.startsWith('net-media');
+        const actionsDiv = document.getElementById(`actions-${videoId}`);
 
         if (isGenericOrExtractor) {
             const targetUrl = format.url || (cached ? cached.pageUrl : window.location.href);
-            downloadResponse = await chrome.runtime.sendMessage({
-                action: 'downloadMediaUrl',
+            startJobWithProgress(actionsDiv, 'startDownloadUrl', {
                 mediaUrl: targetUrl,
-                pageUrl: window.location.href,
-                filename
-            });
+                pageUrl: window.location.href
+            }, filename);
         } else if (format.type === 'video') {
             const quality = format.label.split('p')[0] + 'p';
-            console.log(`[Content] Downloading video: "${videoTitle}" -> "${filename}"`);
-            downloadResponse = await chrome.runtime.sendMessage({
-                action: 'download',
-                type: 'video',
+            startJobWithProgress(actionsDiv, 'startDownloadVideo', {
                 videoId: videoId,
-                quality: quality,
-                filename: filename
-            });
+                quality: quality
+            }, filename);
         } else {
-            downloadResponse = await chrome.runtime.sendMessage({
+            chrome.runtime.sendMessage({
                 action: 'download',
                 type: 'audio',
                 url: format.url,
                 filename: filename
             });
         }
-
-        if (downloadResponse && downloadResponse.success) {
-            downloadBtn.textContent = 'Downloaded!';
-        } else {
-            downloadBtn.textContent = 'Failed';
-        }
-        setTimeout(() => {
-            downloadBtn.textContent = 'Download';
-            downloadBtn.disabled = false;
-        }, 2500);
     };
 }
 
