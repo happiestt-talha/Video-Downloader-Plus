@@ -9,9 +9,9 @@ const requestQueue = [];
 const detectedMediaByTab = new Map();
 
 const MEDIA_URL_PATTERN = /\.(m3u8|mp4|webm|mpd|ts|m4s|flv|mov|mkv)(\?|$|\/)/i;
-const MEDIA_PATH_PATTERN = /(m3u8|mpd|master|playlist|manifest|hls|stream)/i;
+const MEDIA_PATH_PATTERN = /(m3u8|mpd|master|playlist|manifest|hls|stream|chunk|segment|video)/i;
 
-function addDetectedMedia(tabId, url) {
+function addDetectedMedia(tabId, url, reqType) {
     if (tabId < 0 || !url) return;
     if (url.startsWith('blob:') || url.startsWith('data:')) return;
 
@@ -19,7 +19,8 @@ function addDetectedMedia(tabId, url) {
     if (/\.(js|css|png|jpg|jpeg|gif|svg|woff|woff2|ttf|eot|ico|html|json)(\?|$)/i.test(url)) return;
 
     const lowerUrl = url.toLowerCase();
-    const isMediaUrl = MEDIA_URL_PATTERN.test(lowerUrl) || MEDIA_PATH_PATTERN.test(lowerUrl);
+    const isExplicitType = reqType === 'media';
+    const isMediaUrl = isExplicitType || MEDIA_URL_PATTERN.test(lowerUrl) || MEDIA_PATH_PATTERN.test(lowerUrl);
     if (!isMediaUrl) return;
 
     if (!detectedMediaByTab.has(tabId)) detectedMediaByTab.set(tabId, new Map());
@@ -35,7 +36,7 @@ function addDetectedMedia(tabId, url) {
 // Catch media requests non-blockingly as they go out
 chrome.webRequest.onBeforeRequest.addListener(
     (details) => {
-        addDetectedMedia(details.tabId, details.url);
+        addDetectedMedia(details.tabId, details.url, details.type);
     },
     { urls: ["<all_urls>"] }
 );
