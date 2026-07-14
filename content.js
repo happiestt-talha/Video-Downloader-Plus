@@ -1,7 +1,6 @@
-//video-downloader-plus/content.js
-// content.js – with video count, robust detection, lazy loading, cache, and proper filenames
-if (!window.__videoDownloaderInjected) {
-    window.__videoDownloaderInjected = true;
+const VD_SYMBOL = Symbol.for('__vd_injected__');
+if (!window[VD_SYMBOL]) {
+    window[VD_SYMBOL] = true;
     (function () {
         let sidebar = null;
         let currentVideos = [];
@@ -14,6 +13,17 @@ function isExtensionValid() {
     return typeof chrome !== 'undefined' && chrome.runtime && !!chrome.runtime.id;
 }
 
+function injectStyles() {
+    if (document.getElementById('video-downloader-styles')) return;
+    try {
+        const link = document.createElement('link');
+        link.id = 'video-downloader-styles';
+        link.rel = 'stylesheet';
+        link.href = chrome.runtime.getURL('sidebar.css');
+        (document.head || document.documentElement).appendChild(link);
+    } catch (_) { }
+}
+
 // Update video count in header
 function updateVideoCount(count) {
     const countSpan = document.getElementById('video-count');
@@ -23,6 +33,7 @@ function updateVideoCount(count) {
 // Create sidebar DOM with count badge
 function createSidebar() {
     if (sidebar) return sidebar;
+    injectStyles();
 
     const div = document.createElement('div');
     div.id = 'video-downloader-sidebar';

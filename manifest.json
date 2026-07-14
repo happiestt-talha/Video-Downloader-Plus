@@ -34,10 +34,17 @@
             "js": [
                 "content.js"
             ],
-            "css": [
+            "run_at": "document_idle"
+        }
+    ],
+    "web_accessible_resources": [
+        {
+            "resources": [
                 "sidebar.css"
             ],
-            "run_at": "document_idle"
+            "matches": [
+                "<all_urls>"
+            ]
         }
     ]
 }
