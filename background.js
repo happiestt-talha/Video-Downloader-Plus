@@ -11,7 +11,7 @@ const detectedMediaByTab = new Map();
 const MEDIA_URL_PATTERN = /\.(m3u8|mp4|webm|mpd|ts|m4s|flv|mov|mkv)(\?|$|\/)/i;
 const MEDIA_PATH_PATTERN = /(m3u8|mpd|master|playlist|manifest|hls|stream)/i;
 
-function addDetectedMedia(tabId, url, contentType) {
+function addDetectedMedia(tabId, url) {
     if (tabId < 0 || !url) return;
     if (url.startsWith('blob:') || url.startsWith('data:')) return;
 
@@ -19,48 +19,25 @@ function addDetectedMedia(tabId, url, contentType) {
     if (/\.(js|css|png|jpg|jpeg|gif|svg|woff|woff2|ttf|eot|ico|html|json)(\?|$)/i.test(url)) return;
 
     const lowerUrl = url.toLowerCase();
-    const lowerType = (contentType || '').toLowerCase();
-
     const isMediaUrl = MEDIA_URL_PATTERN.test(lowerUrl) || MEDIA_PATH_PATTERN.test(lowerUrl);
-    const isMediaHeader = lowerType.includes('video') ||
-        lowerType.includes('mpegurl') ||
-        lowerType.includes('dash+xml') ||
-        lowerType.includes('mp2t') ||
-        lowerType.includes('audio');
-
-    if (!isMediaUrl && !isMediaHeader) return;
+    if (!isMediaUrl) return;
 
     if (!detectedMediaByTab.has(tabId)) detectedMediaByTab.set(tabId, new Map());
     const tabMap = detectedMediaByTab.get(tabId);
 
     let type = 'video';
-    if (lowerUrl.includes('.m3u8') || lowerType.includes('mpegurl') || lowerUrl.includes('m3u8')) type = 'hls';
-    else if (lowerUrl.includes('.mpd') || lowerType.includes('dash+xml') || lowerUrl.includes('mpd')) type = 'dash';
-    else if (lowerType.includes('audio')) type = 'audio';
+    if (lowerUrl.includes('m3u8')) type = 'hls';
+    else if (lowerUrl.includes('mpd')) type = 'dash';
 
     tabMap.set(url, { url, type, tabId });
 }
 
-// Catch media requests as they go out
+// Catch media requests non-blockingly as they go out
 chrome.webRequest.onBeforeRequest.addListener(
     (details) => {
         addDetectedMedia(details.tabId, details.url);
     },
     { urls: ["<all_urls>"] }
-);
-
-// Also catch via response headers (covers URLs without a matching extension)
-chrome.webRequest.onHeadersReceived.addListener(
-    (details) => {
-        const contentTypeHeader = details.responseHeaders?.find(
-            h => h.name.toLowerCase() === 'content-type'
-        );
-        if (contentTypeHeader) {
-            addDetectedMedia(details.tabId, details.url, contentTypeHeader.value);
-        }
-    },
-    { urls: ["<all_urls>"] },
-    ["responseHeaders"]
 );
 
 // Clear stored media when a tab navigates or closes
