@@ -297,11 +297,10 @@ async function loadFormatsForPageUrl(videoId, pageUrl) {
             };
             populateDropdownFromCache(videoId);
         } else {
-            if (actionsDiv) actionsDiv.innerHTML = '<span style="font-size:12px; color:#ef4444;">No formats found via yt-dlp</span>';
+            if (actionsDiv) actionsDiv.innerHTML = '<span style="font-size:11px; color:#9ca3af;">No direct extractor for URL.<br>▶️ <b>Play video</b> to capture HLS stream automatically.</span>';
         }
     } catch (error) {
-        console.error('Error extracting formats for page:', error);
-        if (actionsDiv) actionsDiv.innerHTML = '<span style="font-size:12px; color:#ef4444;">Extraction failed</span>';
+        if (actionsDiv) actionsDiv.innerHTML = '<span style="font-size:11px; color:#9ca3af;">No direct extractor for URL.<br>▶️ <b>Play video</b> to capture HLS stream automatically.</span>';
     }
 }
 
