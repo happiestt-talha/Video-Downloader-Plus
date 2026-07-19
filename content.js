@@ -10,6 +10,10 @@ if (!window.__videoDownloaderInjected) {
 // Cache for formats
 if (!window.formatCache) window.formatCache = {};
 
+function isExtensionValid() {
+    return typeof chrome !== 'undefined' && chrome.runtime && !!chrome.runtime.id;
+}
+
 // Update video count in header
 function updateVideoCount(count) {
     const countSpan = document.getElementById('video-count');
@@ -199,27 +203,33 @@ async function detectVideosGeneric() {
     });
 
     // 2. Media URLs sniffed from network requests by background.js
-    try {
-        const response = await chrome.runtime.sendMessage({ action: 'getDetectedMedia' });
-        if (response && response.success && Array.isArray(response.media)) {
-            response.media.forEach((m, idx) => {
-                if (m.url && !seen.has(m.url)) {
-                    seen.add(m.url);
-                    let label = m.type === 'hls' ? 'HLS Stream (.m3u8)' : (m.type === 'dash' ? 'DASH Stream (.mpd)' : 'Media Stream');
-                    videos.push({
-                        id: `net-media-${idx}`,
-                        title: `${document.title || 'Video'} (${label})`,
-                        thumbnail: '',
-                        duration: '',
-                        type: 'video',
-                        mediaUrl: m.url,
-                        isGeneric: true
-                    });
-                }
-            });
+    if (isExtensionValid()) {
+        try {
+            const response = await chrome.runtime.sendMessage({ action: 'getDetectedMedia' });
+            if (response && response.success && Array.isArray(response.media)) {
+                response.media.forEach((m, idx) => {
+                    if (m.url && !seen.has(m.url)) {
+                        seen.add(m.url);
+                        let label = m.type === 'hls' ? 'HLS Stream (.m3u8)' : (m.type === 'dash' ? 'DASH Stream (.mpd)' : 'Media Stream');
+                        videos.push({
+                            id: `net-media-${idx}`,
+                            title: `${document.title || 'Video'} (${label})`,
+                            thumbnail: '',
+                            duration: '',
+                            type: 'video',
+                            mediaUrl: m.url,
+                            isGeneric: true
+                        });
+                    }
+                });
+            }
+        } catch (e) {
+            if (e.message && e.message.includes('invalidated')) {
+                console.log('[Video Downloader] Extension reloaded. Refresh webpage to reconnect.');
+            } else {
+                console.warn('[Video Downloader] Could not fetch sniffed media', e);
+            }
         }
-    } catch (e) {
-        console.warn('[Video Downloader] Could not fetch sniffed media', e);
     }
 
     // 3. Scan <iframe> elements for embedded video players
@@ -266,6 +276,10 @@ async function detectVideosGeneric() {
 
 async function loadFormatsForPageUrl(videoId, pageUrl) {
     const actionsDiv = document.getElementById(`actions-${videoId}`);
+    if (!isExtensionValid()) {
+        if (actionsDiv) actionsDiv.innerHTML = '<span style="font-size:12px; color:#f59e0b;">Extension reloaded. Please refresh page.</span>';
+        return;
+    }
     if (actionsDiv) {
         actionsDiv.innerHTML = `
       <select class="format-select" data-video-id="${videoId}"><option>Extracting formats with yt-dlp...</option></select>
@@ -295,6 +309,10 @@ async function loadFormatsForPageUrl(videoId, pageUrl) {
 function renderVideos(videos, searchTerm = '', filter = 'all') {
     const container = document.querySelector('#videos-list');
     if (!container) return;
+    if (!isExtensionValid()) {
+        container.innerHTML = '<div class="no-videos" style="color: #f59e0b; padding: 12px; text-align: center;">⚠️ Extension was reloaded.<br>Please refresh this webpage (F5) to reconnect.</div>';
+        return;
+    }
     updateVideoCount(videos.length);
 
     let filtered = videos;
@@ -559,6 +577,11 @@ function populateDropdownFromCache(videoId) {
 }
 
 async function loadFormatsForVideo(videoId) {
+    if (!isExtensionValid()) {
+        const select = document.querySelector(`.format-select[data-video-id="${videoId}"]`);
+        if (select) select.innerHTML = '<option value="">Extension reloaded. Refresh page.</option>';
+        return;
+    }
     if (window.formatCache[videoId]) {
         populateDropdownFromCache(videoId);
         return;
