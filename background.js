@@ -8,18 +8,35 @@ const requestQueue = [];
 // tabId -> Map(url -> {url, type, tabId})
 const detectedMediaByTab = new Map();
 
-const MEDIA_URL_PATTERN = /\.(m3u8|mp4|webm|mpd|ts)(\?|$)/i;
+const MEDIA_URL_PATTERN = /\.(m3u8|mp4|webm|mpd|ts|m4s|flv|mov|mkv)(\?|$|\/)/i;
+const MEDIA_PATH_PATTERN = /(m3u8|mpd|master|playlist|manifest|hls|stream)/i;
 
 function addDetectedMedia(tabId, url, contentType) {
-    if (tabId < 0) return;
-    if (!MEDIA_URL_PATTERN.test(url) && !(contentType && contentType.includes('video'))) return;
+    if (tabId < 0 || !url) return;
+    if (url.startsWith('blob:') || url.startsWith('data:')) return;
+
+    // Ignore static web assets
+    if (/\.(js|css|png|jpg|jpeg|gif|svg|woff|woff2|ttf|eot|ico|html|json)(\?|$)/i.test(url)) return;
+
+    const lowerUrl = url.toLowerCase();
+    const lowerType = (contentType || '').toLowerCase();
+
+    const isMediaUrl = MEDIA_URL_PATTERN.test(lowerUrl) || MEDIA_PATH_PATTERN.test(lowerUrl);
+    const isMediaHeader = lowerType.includes('video') ||
+        lowerType.includes('mpegurl') ||
+        lowerType.includes('dash+xml') ||
+        lowerType.includes('mp2t') ||
+        lowerType.includes('audio');
+
+    if (!isMediaUrl && !isMediaHeader) return;
 
     if (!detectedMediaByTab.has(tabId)) detectedMediaByTab.set(tabId, new Map());
     const tabMap = detectedMediaByTab.get(tabId);
 
     let type = 'video';
-    if (url.includes('.m3u8')) type = 'hls';
-    else if (url.includes('.mpd')) type = 'dash';
+    if (lowerUrl.includes('.m3u8') || lowerType.includes('mpegurl') || lowerUrl.includes('m3u8')) type = 'hls';
+    else if (lowerUrl.includes('.mpd') || lowerType.includes('dash+xml') || lowerUrl.includes('mpd')) type = 'dash';
+    else if (lowerType.includes('audio')) type = 'audio';
 
     tabMap.set(url, { url, type, tabId });
 }

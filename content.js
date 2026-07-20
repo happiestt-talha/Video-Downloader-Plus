@@ -161,13 +161,12 @@ function isYouTube() {
     return window.location.hostname.includes('youtube.com');
 }
 
-// Generic: find <video> tags directly on the page, plus ask background
-// for any media URLs it sniffed from network traffic
+// Generic: find <video> tags, <iframe> embeds, sniffed network media, and page extraction
 async function detectVideosGeneric() {
     const videos = [];
     const seen = new Set();
 
-    // 1. Direct <video> tags with a src or currentSrc
+    // 1. Direct <video> elements & <source> tags
     document.querySelectorAll('video').forEach((el, idx) => {
         const src = el.currentSrc || el.src;
         if (src && !seen.has(src)) {
@@ -182,7 +181,6 @@ async function detectVideosGeneric() {
                 isGeneric: true
             });
         }
-        // Also check <source> children
         el.querySelectorAll('source').forEach((sourceEl, sIdx) => {
             const sSrc = sourceEl.src;
             if (sSrc && !seen.has(sSrc)) {
@@ -203,13 +201,14 @@ async function detectVideosGeneric() {
     // 2. Media URLs sniffed from network requests by background.js
     try {
         const response = await chrome.runtime.sendMessage({ action: 'getDetectedMedia' });
-        if (response.success) {
+        if (response && response.success && Array.isArray(response.media)) {
             response.media.forEach((m, idx) => {
-                if (!seen.has(m.url)) {
+                if (m.url && !seen.has(m.url)) {
                     seen.add(m.url);
+                    let label = m.type === 'hls' ? 'HLS Stream (.m3u8)' : (m.type === 'dash' ? 'DASH Stream (.mpd)' : 'Media Stream');
                     videos.push({
                         id: `net-media-${idx}`,
-                        title: document.title || 'Video',
+                        title: `${document.title || 'Video'} (${label})`,
                         thumbnail: '',
                         duration: '',
                         type: 'video',
@@ -223,7 +222,73 @@ async function detectVideosGeneric() {
         console.warn('[Video Downloader] Could not fetch sniffed media', e);
     }
 
+    // 3. Scan <iframe> elements for embedded video players
+    const ignoreIframes = ['facebook', 'twitter', 'google', 'disqus', 'analytics', 'doubleclick', 'captcha'];
+    document.querySelectorAll('iframe').forEach((iframe, idx) => {
+        const src = iframe.src || iframe.dataset.src;
+        if (src && src.startsWith('http') && !seen.has(src)) {
+            const isIgnored = ignoreIframes.some(domain => src.toLowerCase().includes(domain));
+            if (!isIgnored) {
+                seen.add(src);
+                try {
+                    const host = new URL(src).hostname;
+                    videos.push({
+                        id: `iframe-embed-${idx}`,
+                        title: `Embed Player (${host})`,
+                        thumbnail: '',
+                        duration: '',
+                        type: 'page',
+                        pageUrl: src,
+                        isPageExtractor: true
+                    });
+                } catch (_) { }
+            }
+        }
+    });
+
+    // 4. Main Page URL (yt-dlp Extractor)
+    const currentUrl = window.location.href;
+    if (!seen.has(currentUrl)) {
+        seen.add(currentUrl);
+        videos.unshift({
+            id: `page-extractor-main`,
+            title: `${document.title || 'Page Video'} (Page Extractor)`,
+            thumbnail: '',
+            duration: '',
+            type: 'page',
+            pageUrl: currentUrl,
+            isPageExtractor: true
+        });
+    }
+
     return videos;
+}
+
+async function loadFormatsForPageUrl(videoId, pageUrl) {
+    const actionsDiv = document.getElementById(`actions-${videoId}`);
+    if (actionsDiv) {
+        actionsDiv.innerHTML = `
+      <select class="format-select" data-video-id="${videoId}"><option>Extracting formats with yt-dlp...</option></select>
+      <button class="download-btn" data-video-id="${videoId}" disabled>Download</button>
+    `;
+    }
+    try {
+        const response = await chrome.runtime.sendMessage({ action: 'getFormatsForUrl', pageUrl });
+        if (response && response.success && response.data && response.data.formats && response.data.formats.length > 0) {
+            window.formatCache[videoId] = {
+                formats: response.data.formats,
+                title: response.data.title || document.title,
+                thumbnail: response.data.thumbnail || '',
+                pageUrl: pageUrl
+            };
+            populateDropdownFromCache(videoId);
+        } else {
+            if (actionsDiv) actionsDiv.innerHTML = '<span style="font-size:12px; color:#ef4444;">No formats found via yt-dlp</span>';
+        }
+    } catch (error) {
+        console.error('Error extracting formats for page:', error);
+        if (actionsDiv) actionsDiv.innerHTML = '<span style="font-size:12px; color:#ef4444;">Extraction failed</span>';
+    }
 }
 
 // Render videos with caching and lazy loading
@@ -254,6 +319,36 @@ function renderVideos(videos, searchTerm = '', filter = 'all') {
         </div>
       </div>
     `;
+        }
+
+        if (video.isPageExtractor) {
+            const cached = window.formatCache[video.id];
+            if (cached && cached.formats && cached.formats.length > 0) {
+                return `
+          <div class="video-item" data-video-id="${video.id}">
+            <div class="video-info" style="flex:1;">
+              <div class="video-title" title="${escapeHtml(video.title)}">${escapeHtml(video.title)}</div>
+              <div class="video-actions" id="actions-${video.id}">
+                <select class="format-select" data-video-id="${video.id}">
+                  ${buildFormatOptions(cached.formats)}
+                </select>
+                <button class="download-btn" data-video-id="${video.id}">Download</button>
+              </div>
+            </div>
+          </div>
+        `;
+            } else {
+                return `
+          <div class="video-item" data-video-id="${video.id}">
+            <div class="video-info" style="flex:1;">
+              <div class="video-title" title="${escapeHtml(video.title)}">${escapeHtml(video.title)}</div>
+              <div class="video-actions" id="actions-${video.id}">
+                <button class="extract-page-formats-btn" data-video-id="${video.id}" data-page-url="${escapeHtml(video.pageUrl)}">📥 Extract Formats (yt-dlp)</button>
+              </div>
+            </div>
+          </div>
+        `;
+            }
         }
 
         const cached = window.formatCache[video.id];
@@ -335,6 +430,22 @@ function renderVideos(videos, searchTerm = '', filter = 'all') {
             return;
         }
 
+        if (video.isPageExtractor) {
+            const extractBtn = document.querySelector(`.extract-page-formats-btn[data-video-id="${video.id}"]`);
+            if (extractBtn) {
+                extractBtn.onclick = () => {
+                    loadFormatsForPageUrl(video.id, video.pageUrl);
+                };
+            } else {
+                const select = document.querySelector(`.format-select[data-video-id="${video.id}"]`);
+                const downloadBtn = document.querySelector(`.download-btn[data-video-id="${video.id}"]`);
+                if (select && downloadBtn && window.formatCache[video.id]) {
+                    attachDownloadHandler(video.id, window.formatCache[video.id].formats, window.formatCache[video.id].title);
+                }
+            }
+            return;
+        }
+
         if (video.isCurrent) {
             if (!window.formatCache[video.id]) loadFormatsForVideo(video.id);
             else populateDropdownFromCache(video.id);
@@ -374,25 +485,38 @@ function attachDownloadHandler(videoId, formats, videoTitle) {
     const downloadBtn = document.querySelector(`.download-btn[data-video-id="${videoId}"]`);
     if (!select || !downloadBtn) return;
 
-    if (select.options.length === 1 && select.options[0].text === 'Loading formats...') {
+    if (select.options.length === 1 && (select.options[0].text.includes('Loading') || select.options[0].text.includes('Extracting'))) {
         select.innerHTML = buildFormatOptions(formats);
     }
     downloadBtn.disabled = false;
 
     downloadBtn.onclick = async () => {
         const selectedIdx = select.value;
-        if (!selectedIdx) return;
+        if (selectedIdx === '' || selectedIdx === null) return;
         const format = formats[parseInt(selectedIdx)];
         if (!format) return;
 
-        downloadBtn.textContent = format.type === 'video' ? 'Merging...' : 'Downloading...';
+        downloadBtn.textContent = 'Downloading...';
         downloadBtn.disabled = true;
 
+        const safeTitle = sanitizeFilename(videoTitle);
+        const ext = format.extension || (format.type === 'audio' ? 'mp3' : 'mp4');
+        const filename = `${safeTitle}.${ext}`;
+
         let downloadResponse;
-        if (format.type === 'video') {
+        const cached = window.formatCache[videoId];
+        const isGenericOrExtractor = videoId.startsWith('page-extractor') || videoId.startsWith('iframe-embed') || videoId.startsWith('dom-video') || videoId.startsWith('net-media');
+
+        if (isGenericOrExtractor) {
+            const targetUrl = format.url || (cached ? cached.pageUrl : window.location.href);
+            downloadResponse = await chrome.runtime.sendMessage({
+                action: 'downloadMediaUrl',
+                mediaUrl: targetUrl,
+                pageUrl: window.location.href,
+                filename
+            });
+        } else if (format.type === 'video') {
             const quality = format.label.split('p')[0] + 'p';
-            const safeTitle = sanitizeFilename(videoTitle);
-            const filename = `${safeTitle}.mp4`;
             console.log(`[Content] Downloading video: "${videoTitle}" -> "${filename}"`);
             downloadResponse = await chrome.runtime.sendMessage({
                 action: 'download',
@@ -402,8 +526,6 @@ function attachDownloadHandler(videoId, formats, videoTitle) {
                 filename: filename
             });
         } else {
-            const safeTitle = sanitizeFilename(videoTitle);
-            const filename = `${safeTitle}.${format.extension}`;
             downloadResponse = await chrome.runtime.sendMessage({
                 action: 'download',
                 type: 'audio',
@@ -412,19 +534,15 @@ function attachDownloadHandler(videoId, formats, videoTitle) {
             });
         }
 
-        if (downloadResponse.success) {
+        if (downloadResponse && downloadResponse.success) {
             downloadBtn.textContent = 'Downloaded!';
-            setTimeout(() => {
-                downloadBtn.textContent = 'Download';
-                downloadBtn.disabled = false;
-            }, 2000);
         } else {
             downloadBtn.textContent = 'Failed';
-            setTimeout(() => {
-                downloadBtn.textContent = 'Download';
-                downloadBtn.disabled = false;
-            }, 2000);
         }
+        setTimeout(() => {
+            downloadBtn.textContent = 'Download';
+            downloadBtn.disabled = false;
+        }, 2500);
     };
 }
 
