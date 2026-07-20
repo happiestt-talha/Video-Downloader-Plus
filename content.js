@@ -1,8 +1,11 @@
 //video-downloader-plus/content.js
 // content.js – with video count, robust detection, lazy loading, cache, and proper filenames
-let sidebar = null;
-let currentVideos = [];
-let isSidebarOpen = false;
+if (!window.__videoDownloaderInjected) {
+    window.__videoDownloaderInjected = true;
+    (function () {
+        let sidebar = null;
+        let currentVideos = [];
+        let isSidebarOpen = false;
 
 // Cache for formats
 if (!window.formatCache) window.formatCache = {};
@@ -511,11 +514,13 @@ function toggleSidebar() {
     }
 }
 
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-    if (request.action === 'toggleSidebar') {
-        toggleSidebar();
-        sendResponse({ success: true });
-    }
-});
+        chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+            if (request.action === 'toggleSidebar') {
+                toggleSidebar();
+                sendResponse({ success: true });
+            }
+        });
 
-console.log('Video Downloader content script loaded (final version with proper filenames)');
+        console.log('Video Downloader content script loaded (final version with proper filenames)');
+    })();
+}
