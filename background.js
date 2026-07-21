@@ -184,12 +184,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
 chrome.action.onClicked.addListener(async (tab) => {
     try {
-        await chrome.scripting.executeScript({
-            target: { tabId: tab.id },
-            files: ['content.js']
-        });
-        chrome.tabs.sendMessage(tab.id, { action: 'toggleSidebar' });
+        await chrome.tabs.sendMessage(tab.id, { action: 'toggleSidebar' });
     } catch (error) {
-        console.error('Failed to inject:', error);
+        // Content script may not be loaded yet on this tab (e.g. page loaded
+        // before the extension was installed/reloaded) — inject as a fallback
+        console.warn('No content script listener found, injecting as fallback:', error.message);
+        try {
+            await chrome.scripting.executeScript({
+                target: { tabId: tab.id },
+                files: ['content.js']
+            });
+            chrome.tabs.sendMessage(tab.id, { action: 'toggleSidebar' });
+        } catch (injectError) {
+            console.error('Fallback injection also failed:', injectError);
+        }
     }
 });
