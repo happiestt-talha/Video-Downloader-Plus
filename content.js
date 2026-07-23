@@ -54,9 +54,13 @@ function createSidebar() {
         isSidebarOpen = false;
     });
 
-    div.querySelector('#refresh-videos').addEventListener('click', () => {
+    div.querySelector('#refresh-videos').addEventListener('click', async () => {
         console.log('[Video Downloader] Manual refresh');
-        currentVideos = detectVideos();
+        if (isYouTube()) {
+            currentVideos = detectVideos();
+        } else {
+            currentVideos = await detectVideosGeneric();
+        }
         updateVideoCount(currentVideos.length);
         renderVideos(currentVideos, div.querySelector('#video-search').value,
             div.querySelector('.filter-buttons button.filter-active').dataset.filter);
@@ -150,6 +154,75 @@ function getVideoDuration() {
     return durationEl ? durationEl.textContent : '';
 }
 
+function isYouTube() {
+    return window.location.hostname.includes('youtube.com');
+}
+
+// Generic: find <video> tags directly on the page, plus ask background
+// for any media URLs it sniffed from network traffic
+async function detectVideosGeneric() {
+    const videos = [];
+    const seen = new Set();
+
+    // 1. Direct <video> tags with a src or currentSrc
+    document.querySelectorAll('video').forEach((el, idx) => {
+        const src = el.currentSrc || el.src;
+        if (src && !seen.has(src)) {
+            seen.add(src);
+            videos.push({
+                id: `dom-video-${idx}`,
+                title: document.title || 'Video',
+                thumbnail: '',
+                duration: '',
+                type: 'video',
+                mediaUrl: src,
+                isGeneric: true
+            });
+        }
+        // Also check <source> children
+        el.querySelectorAll('source').forEach((sourceEl, sIdx) => {
+            const sSrc = sourceEl.src;
+            if (sSrc && !seen.has(sSrc)) {
+                seen.add(sSrc);
+                videos.push({
+                    id: `dom-video-${idx}-src-${sIdx}`,
+                    title: document.title || 'Video',
+                    thumbnail: '',
+                    duration: '',
+                    type: 'video',
+                    mediaUrl: sSrc,
+                    isGeneric: true
+                });
+            }
+        });
+    });
+
+    // 2. Media URLs sniffed from network requests by background.js
+    try {
+        const response = await chrome.runtime.sendMessage({ action: 'getDetectedMedia' });
+        if (response.success) {
+            response.media.forEach((m, idx) => {
+                if (!seen.has(m.url)) {
+                    seen.add(m.url);
+                    videos.push({
+                        id: `net-media-${idx}`,
+                        title: document.title || 'Video',
+                        thumbnail: '',
+                        duration: '',
+                        type: 'video',
+                        mediaUrl: m.url,
+                        isGeneric: true
+                    });
+                }
+            });
+        }
+    } catch (e) {
+        console.warn('[Video Downloader] Could not fetch sniffed media', e);
+    }
+
+    return videos;
+}
+
 // Render videos with caching and lazy loading
 function renderVideos(videos, searchTerm = '', filter = 'all') {
     const container = document.querySelector('#videos-list');
@@ -167,6 +240,19 @@ function renderVideos(videos, searchTerm = '', filter = 'all') {
     }
 
     container.innerHTML = filtered.map(video => {
+        if (video.isGeneric) {
+            return `
+      <div class="video-item" data-video-id="${video.id}">
+        <div class="video-info" style="flex:1;">
+          <div class="video-title" title="${escapeHtml(video.title)}">${escapeHtml(video.title)}</div>
+          <div class="video-actions">
+            <button class="download-btn generic-download-btn" data-media-url="${escapeHtml(video.mediaUrl)}">Download</button>
+          </div>
+        </div>
+      </div>
+    `;
+        }
+
         const cached = window.formatCache[video.id];
         const hasCached = cached && cached.formats && cached.formats.length > 0;
 
@@ -226,6 +312,26 @@ function renderVideos(videos, searchTerm = '', filter = 'all') {
 
     // Attach event handlers
     filtered.forEach(video => {
+        if (video.isGeneric) {
+            const btn = document.querySelector(`.generic-download-btn[data-media-url="${CSS.escape(video.mediaUrl)}"]`);
+            if (btn) {
+                btn.onclick = async () => {
+                    btn.textContent = 'Downloading...';
+                    btn.disabled = true;
+                    const filename = sanitizeFilename(document.title) + '.mp4';
+                    const resp = await chrome.runtime.sendMessage({
+                        action: 'downloadMediaUrl',
+                        mediaUrl: video.mediaUrl,
+                        pageUrl: window.location.href,
+                        filename
+                    });
+                    btn.textContent = resp.success ? 'Downloaded!' : 'Failed';
+                    setTimeout(() => { btn.textContent = 'Download'; btn.disabled = false; }, 2000);
+                };
+            }
+            return;
+        }
+
         if (video.isCurrent) {
             if (!window.formatCache[video.id]) loadFormatsForVideo(video.id);
             else populateDropdownFromCache(video.id);
@@ -373,12 +479,24 @@ function toggleSidebar() {
         isSidebarOpen = false;
     } else {
         createSidebar();
-        currentVideos = detectVideos();
-        updateVideoCount(currentVideos.length);
-        renderVideos(currentVideos);
+
+        if (isYouTube()) {
+            currentVideos = detectVideos();
+            updateVideoCount(currentVideos.length);
+            renderVideos(currentVideos);
+        } else {
+            updateVideoCount(0);
+            renderVideos([]);
+            detectVideosGeneric().then(videos => {
+                currentVideos = videos;
+                updateVideoCount(currentVideos.length);
+                renderVideos(currentVideos);
+            });
+        }
+
         if (window.videoObserver) window.videoObserver.disconnect();
         window.videoObserver = new MutationObserver(() => {
-            if (isSidebarOpen) {
+            if (isSidebarOpen && isYouTube()) {
                 const newVideos = detectVideos();
                 if (newVideos.length !== currentVideos.length) {
                     currentVideos = newVideos;
@@ -400,4 +518,4 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 });
 
-console.log('Video Downloader content script loaded (final version with proper filenames)');
+console.log('Video Downloader content script loaded (final version with proper filenames)');
