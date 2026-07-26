@@ -1,10 +1,61 @@
-//video-downloader-plus/background.js
 const API_URL = 'http://localhost:3000';
 
 const pendingRequests = new Map();
 let activeRequests = 0;
 const MAX_CONCURRENT = 2;
 const requestQueue = [];
+
+// tabId -> Map(url -> {url, type, tabId})
+const detectedMediaByTab = new Map();
+
+const MEDIA_URL_PATTERN = /\.(m3u8|mp4|webm|mpd|ts)(\?|$)/i;
+
+function addDetectedMedia(tabId, url, contentType) {
+    if (tabId < 0) return;
+    if (!MEDIA_URL_PATTERN.test(url) && !(contentType && contentType.includes('video'))) return;
+
+    if (!detectedMediaByTab.has(tabId)) detectedMediaByTab.set(tabId, new Map());
+    const tabMap = detectedMediaByTab.get(tabId);
+
+    let type = 'video';
+    if (url.includes('.m3u8')) type = 'hls';
+    else if (url.includes('.mpd')) type = 'dash';
+
+    tabMap.set(url, { url, type, tabId });
+}
+
+// Catch media requests as they go out
+chrome.webRequest.onBeforeRequest.addListener(
+    (details) => {
+        addDetectedMedia(details.tabId, details.url);
+    },
+    { urls: ["<all_urls>"] }
+);
+
+// Also catch via response headers (covers URLs without a matching extension)
+chrome.webRequest.onHeadersReceived.addListener(
+    (details) => {
+        const contentTypeHeader = details.responseHeaders?.find(
+            h => h.name.toLowerCase() === 'content-type'
+        );
+        if (contentTypeHeader) {
+            addDetectedMedia(details.tabId, details.url, contentTypeHeader.value);
+        }
+    },
+    { urls: ["<all_urls>"] },
+    ["responseHeaders"]
+);
+
+// Clear stored media when a tab navigates or closes
+chrome.tabs.onRemoved.addListener((tabId) => {
+    detectedMediaByTab.delete(tabId);
+});
+
+chrome.webNavigation.onCommitted.addListener((details) => {
+    if (details.frameId === 0) {
+        detectedMediaByTab.delete(details.tabId);
+    }
+});
 
 function processQueue() {
     if (requestQueue.length === 0 || activeRequests >= MAX_CONCURRENT) return;
@@ -40,13 +91,21 @@ async function getVideoFormats(videoId) {
     return promise;
 }
 
+// Generic extraction: pass a page URL to yt-dlp's generic extractor
+async function fetchFormatsForUrl(pageUrl) {
+    console.log(`[Background] Requesting generic formats for ${pageUrl}`);
+    const response = await fetch(`${API_URL}/formats-url?url=${encodeURIComponent(pageUrl)}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    return response.json();
+}
+
 async function downloadWithMerge(videoId, quality, filename) {
     try {
         console.log(`[Background] Downloading ${videoId} as "${filename}"`);
         const downloadUrl = `${API_URL}/download?videoId=${videoId}&quality=${quality}&filename=${encodeURIComponent(filename)}`;
         const downloadId = await chrome.downloads.download({
             url: downloadUrl,
-            filename: filename,  // still provide as fallback
+            filename: filename,
             saveAs: false
         });
         return { success: true, downloadId };
@@ -64,6 +123,21 @@ async function downloadDirect(url, filename) {
     }
 }
 
+// Send a sniffed media URL (e.g. .m3u8) to the server to be resolved/merged via yt-dlp
+async function downloadMediaUrl(mediaUrl, pageUrl, filename) {
+    try {
+        const downloadUrl = `${API_URL}/download-url?mediaUrl=${encodeURIComponent(mediaUrl)}&pageUrl=${encodeURIComponent(pageUrl || '')}&filename=${encodeURIComponent(filename)}`;
+        const downloadId = await chrome.downloads.download({
+            url: downloadUrl,
+            filename: filename,
+            saveAs: false
+        });
+        return { success: true, downloadId };
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
+}
+
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'getFormats') {
         getVideoFormats(request.videoId)
@@ -71,6 +145,22 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             .catch(error => sendResponse({ success: false, error: error.message }));
         return true;
     }
+
+    if (request.action === 'getFormatsForUrl') {
+        fetchFormatsForUrl(request.pageUrl)
+            .then(data => sendResponse({ success: true, data }))
+            .catch(error => sendResponse({ success: false, error: error.message }));
+        return true;
+    }
+
+    if (request.action === 'getDetectedMedia') {
+        const tabId = sender.tab?.id ?? request.tabId;
+        const tabMap = detectedMediaByTab.get(tabId);
+        const list = tabMap ? Array.from(tabMap.values()) : [];
+        sendResponse({ success: true, media: list });
+        return true;
+    }
+
     if (request.action === 'download') {
         if (request.type === 'video') {
             downloadWithMerge(request.videoId, request.quality, request.filename)
@@ -81,6 +171,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
                 .then(result => sendResponse(result))
                 .catch(error => sendResponse({ success: false, error: error.message }));
         }
+        return true;
+    }
+
+    if (request.action === 'downloadMediaUrl') {
+        downloadMediaUrl(request.mediaUrl, request.pageUrl, request.filename)
+            .then(result => sendResponse(result))
+            .catch(error => sendResponse({ success: false, error: error.message }));
         return true;
     }
 });
